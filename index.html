@@ -357,7 +357,7 @@
     </div>
   </div>
 
-  <!-- Settings Modal (Gemini API Key) -->
+  <!-- Settings Modal -->
   <div id="modal-settings" class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm hidden flex-col justify-end md:justify-center items-center">
     <div class="bg-white w-full md:max-w-md rounded-t-3xl md:rounded-3xl p-6 shadow-2xl transform transition-transform translate-y-full" id="modal-settings-content">
       <div class="flex justify-between items-center mb-5">
@@ -368,12 +368,12 @@
         <div>
           <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Gemini AI API Key</label>
           <input type="password" id="settings-gemini-key" placeholder="AIzaSy..." class="input-field font-mono">
-          <p class="text-[10px] text-slate-400 mt-1.5 leading-tight">Required for the Smart Auto-Log feature to process natural language. This is stored securely in your browser's local storage and never sent to our servers.</p>
+          <p class="text-[10px] text-slate-400 mt-1.5 leading-tight">Required for the Smart Auto-Log feature to process natural language.</p>
         </div>
         <div>
           <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Security PIN</label>
-          <input type="password" id="app-pin" placeholder="Enter your secret backend PIN" class="input-field font-mono">
-          <p class="text-[10px] text-slate-400 mt-1.5 leading-tight">Required to securely sync data with your Google Sheet.</p>
+          <input type="password" id="app-pin" placeholder="Enter your secret backend PIN" class="input-field font-mono" required>
+          <p class="text-[10px] text-slate-400 mt-1.5 leading-tight">Must match the SECRET_KEY defined in your Google Apps Script.</p>
         </div>
         <button type="submit" class="w-full py-3.5 bg-slate-900 text-white font-bold rounded-xl active:scale-95 transition mt-2">Save Settings</button>
       </form>
@@ -441,15 +441,17 @@
     let GEMINI_API_KEY = "";
 
     // Application State
-    let state = { txs: [], subs: [], debts: [], ious: [], budget: 35000, currentMonth: 'all' };
+    let state = { txs: [], subs: [], debts: [], ious: [], budget: 35000, currentMonth: 'all', settings: { geminiKey: "", appPin: "" } };
     let chartTrend = null; let chartCategory = null; let isSyncing = false;
 
     // ==========================================
     // 1. DATA SYNCING & INIT
     // ==========================================
-   function loadSettings() { 
-      document.getElementById('settings-gemini-key').value = state.settings?.geminiKey || ""; 
-      document.getElementById('app-pin').value = state.settings?.appPin || "";
+    function loadSettings() { 
+      if (!state.settings) state.settings = {};
+      document.getElementById('settings-gemini-key').value = state.settings.geminiKey || ""; 
+      document.getElementById('app-pin').value = state.settings.appPin || "";
+      if (state.settings.geminiKey) GEMINI_API_KEY = state.settings.geminiKey;
     } 
 
     function saveSettings(e) { 
@@ -458,19 +460,23 @@
       
       state.settings.geminiKey = document.getElementById('settings-gemini-key').value.trim();
       state.settings.appPin = document.getElementById('app-pin').value.trim();
+      GEMINI_API_KEY = state.settings.geminiKey;
       
       saveLocalState();
       closeModal('modal-settings');
-      showToast("Settings saved");
-      loadDataFromSheet(); 
+      showToast("Settings saved. Connecting...");
+      loadDataFromSheet(false); 
     }
 
     function loadLocalState() {
       const s = localStorage.getItem('spendpulse_state_v2');
       if (s) { try { state = JSON.parse(s); } catch(e){} }
-      if(!state.txs) state.txs = []; if(!state.subs) state.subs = []; 
-      if(!state.debts) state.debts = []; if(!state.ious) state.ious = [];
+      if(!state.txs) state.txs = []; 
+      if(!state.subs) state.subs = []; 
+      if(!state.debts) state.debts = []; 
+      if(!state.ious) state.ious = [];
       if(!state.budget) state.budget = 35000;
+      if(!state.settings) state.settings = { geminiKey: "", appPin: "" };
       
       const today = new Date().toISOString().split('T')[0];
       if(!state.currentMonth || state.currentMonth === 'all') state.currentMonth = today.substring(0,7);
@@ -486,30 +492,40 @@
 
     async function loadDataFromSheet(hideOverlay = false) {
       if(isSyncing) return;
+
+      const pin = state.settings?.appPin || ""; 
+      if (!pin) {
+        updateSyncUI('error');
+        if(hideOverlay) {
+          document.getElementById('initial-loading').classList.add('opacity-0');
+          setTimeout(() => document.getElementById('initial-loading').classList.add('hidden'), 300);
+        }
+        openModal('modal-settings');
+        showToast("Enter your Security PIN in Settings to sync", "error");
+        return;
+      }
+
       isSyncing = true;
       updateSyncUI('syncing');
 
       try {
-        const pin = state.settings?.appPin || ""; 
         const res = await fetch(`${SCRIPT_URL}?auth=${encodeURIComponent(pin)}`, { method: "GET", redirect: "follow" });
         const result = await res.json();
 
-        // Handle unauthorized errors explicitly
         if (result.error) throw new Error(result.error);
 
-        // Support both the old format and the new row-based format
         let cloudState = result.status === "success" ? result.data : result;
 
         if (cloudState) {
-          // Un-nest the state if it accidentally got wrapped in { state: {...} } during the glitch
+          const preservedSettings = Object.assign({}, state.settings);
           state = cloudState.state ? cloudState.state : cloudState;
           
-          // Map the backend's 'transactions' array back to your frontend's 'txs' array
           if (state.transactions) {
             state.txs = state.transactions;
             delete state.transactions;
           }
           if (!state.txs) state.txs = [];
+          if (!state.settings || !state.settings.appPin) state.settings = preservedSettings;
 
           const today = new Date().toISOString().split('T')[0];
           state.currentMonth = today.substring(0,7);
@@ -517,14 +533,14 @@
           saveLocalState();
           renderAll();
           updateSyncUI('success');
-          if(!hideOverlay) showToast("Data synced from cloud!");
+          if(!hideOverlay) showToast("Cloud synced successfully!");
         } else {
           updateSyncUI('success');
         }
       } catch(err) {
-        console.error(err);
+        console.error("Load error:", err);
         updateSyncUI('error');
-        if(!hideOverlay) showToast("Sync failed");
+        if(!hideOverlay) showToast("Sync failed. Check your PIN.", "error");
       } finally {
         isSyncing = false;
         if(hideOverlay) {
@@ -540,18 +556,21 @@
       updateSyncUI('syncing');
       
       try {
-        // Flatten the payload exactly how the backend Apps Script expects it
         const payload = Object.assign({}, state);
         payload.auth = state.settings?.appPin || "";
-        payload.transactions = state.txs; // Feed the backend the 'transactions' array it expects
-        delete payload.txs; // Remove duplicate array to save space in cell A1
+        payload.transactions = state.txs;
+        delete payload.txs;
 
-        await fetch(SCRIPT_URL, {
+        const res = await fetch(SCRIPT_URL, {
           method: "POST",
           redirect: "follow",
           headers: { "Content-Type": "text/plain;charset=utf-8" }, 
           body: JSON.stringify(payload)
         });
+        const respText = await res.text();
+        if (respText.includes("Error") || respText.includes("Unauthorized")) {
+          throw new Error(respText);
+        }
         updateSyncUI('success');
       } catch(err) {
         console.error("Push Error:", err);
@@ -570,7 +589,7 @@
     }
 
     // ==========================================
-    // 2. DYNAMIC FORM LOGIC (Income vs Expense)
+    // 2. DYNAMIC FORM LOGIC
     // ==========================================
     const typeRadios = document.getElementsByName('tx-type');
     const descInput = document.getElementById('tx-desc');
@@ -589,7 +608,7 @@
         paySelect.innerHTML = `<option value="UPI">UPI</option><option value="HDFC Bank">HDFC Bank</option><option value="Credit Card">Credit Card</option><option value="Cash">Cash</option><option value="Ola Money">Ola Money</option>`;
       } else {
         descLabel.textContent = "Source / Client";
-        descInput.placeholder = "e.g. Salary, Meta Ads Consulting";
+        descInput.placeholder = "e.g. Salary, Consulting";
         catSelect.innerHTML = `<option value="Salary">Salary</option><option value="Freelance & Consulting">Freelance & Consulting</option><option value="Investments & Dividends">Investments & Dividends</option><option value="Tax Refund">Tax Refund</option><option value="Other Inflow">Other Inflow</option>`;
         payLabel.textContent = "Account Credited";
         paySelect.innerHTML = `<option value="HDFC Bank">HDFC Bank</option><option value="Zerodha">Zerodha</option><option value="Cash">Cash</option>`;
@@ -792,7 +811,7 @@
       saveLocalState(); renderAll(); showToast(msg); syncDataToSheet(newEntry);
     }
 
-    // Forms
+    // Form Event Listeners
     document.getElementById('form-tx').addEventListener('submit', (e) => {
       e.preventDefault();
       const entry = { id: 'tx-'+Date.now(), type: document.querySelector('input[name="tx-type"]:checked').value, amount: parseFloat(document.getElementById('tx-amt').value), desc: document.getElementById('tx-desc').value, category: document.getElementById('tx-cat').value, pay: document.getElementById('tx-pay').value, date: document.getElementById('tx-date').value };
@@ -800,12 +819,7 @@
       closeModal('modal-manual-tx'); document.getElementById('form-tx').reset(); processChange('Transaction Saved', entry);
     });
 
-    document.getElementById('form-settings').addEventListener('submit', (e) => {
-      e.preventDefault();
-      GEMINI_API_KEY = document.getElementById('settings-gemini-key').value.trim();
-      localStorage.setItem('spendpulse_gemini_key', GEMINI_API_KEY);
-      closeModal('modal-settings'); showToast('Settings Saved!');
-    });
+    document.getElementById('form-settings').addEventListener('submit', saveSettings);
 
     document.getElementById('form-sub').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -851,7 +865,7 @@
           systemInstruction: { parts: [{ text: "Extract Indian personal finance transaction details. 'type' is 'expense' or 'income'. 'category' MUST be ONE of: 'Food & Dining', 'Transport', 'Shopping', 'Bills & Utilities', 'Investments', 'Miscellaneous', 'Salary', 'Freelance & Consulting', 'Investments & Dividends', 'Tax Refund', 'Other Inflow'. 'pay' (method) is usually 'UPI', 'HDFC Bank', 'Cash', 'Credit Card', 'Zerodha', 'Ola Money'." }] },
           generationConfig: { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { type: { type: "STRING" }, amount: { type: "NUMBER" }, desc: { type: "STRING" }, category: { type: "STRING" }, pay: { type: "STRING" } }, required: ["type", "amount", "desc", "category", "pay"] } }
         };
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`, {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
         });
         const data = await res.json();
@@ -921,16 +935,15 @@
 
     // --- Init ---
     window.addEventListener('DOMContentLoaded', () => {
-      loadSettings();
       loadLocalState();
-      updateTxFormFields(); // initialize manual entry dynamic fields
+      loadSettings();
+      updateTxFormFields();
       renderAll();
       loadDataFromSheet(true);
     });
-    // Register Service Worker
+
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        // Register ServiceWorker using an absolute path relative to the repo
         navigator.serviceWorker.register('sw.js');
       });
     }
