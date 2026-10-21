@@ -370,6 +370,11 @@
           <input type="password" id="settings-gemini-key" placeholder="AIzaSy..." class="input-field font-mono">
           <p class="text-[10px] text-slate-400 mt-1.5 leading-tight">Required for the Smart Auto-Log feature to process natural language. This is stored securely in your browser's local storage and never sent to our servers.</p>
         </div>
+        <div>
+          <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">Security PIN</label>
+          <input type="password" id="app-pin" placeholder="Enter your secret backend PIN" class="input-field font-mono">
+          <p class="text-[10px] text-slate-400 mt-1.5 leading-tight">Required to securely sync data with your Google Sheet.</p>
+        </div>
         <button type="submit" class="w-full py-3.5 bg-slate-900 text-white font-bold rounded-xl active:scale-95 transition mt-2">Save Settings</button>
       </form>
     </div>
@@ -442,13 +447,23 @@
     // ==========================================
     // 1. DATA SYNCING & INIT
     // ==========================================
-    function loadSettings() {
-      const savedKey = localStorage.getItem('spendpulse_gemini_key');
-      if (savedKey) {
-        GEMINI_API_KEY = savedKey;
-        document.getElementById('settings-gemini-key').value = savedKey;
-      }
-    }
+   function loadSettings() { 
+  document.getElementById('settings-gemini-key').value = state.settings?.geminiKey || ""; 
+  document.getElementById('app-pin').value = state.settings?.appPin || "";
+} 
+
+function saveSettings(e) { 
+  if (e) e.preventDefault(); 
+  if (!state.settings) state.settings = {};
+  
+  state.settings.geminiKey = document.getElementById('settings-gemini-key').value.trim();
+  state.settings.appPin = document.getElementById('app-pin').value.trim();
+  
+  saveLocalState();
+  closeModal('modal-settings');
+  showToast("Settings saved");
+  loadDataFromSheet(); 
+}
 
     function loadLocalState() {
       const s = localStorage.getItem('spendpulse_state_v2');
@@ -475,7 +490,8 @@
   updateSyncUI('syncing');
 
   try {
-    const res = await fetch(SCRIPT_URL, { method: "GET", redirect: "follow" });
+   const pin = state.settings?.appPin || ""; 
+const res = await fetch(`${SCRIPT_URL}?auth=${encodeURIComponent(pin)}`, { method: "GET", redirect: "follow" });
     const result = await res.json();
 
     // Support both the old format and the new row-based format
@@ -518,7 +534,7 @@
           method: "POST",
           redirect: "follow",
           headers: { "Content-Type": "text/plain;charset=utf-8" }, 
-          body: JSON.stringify({ state: state, newEntry: newEntry })
+         body: JSON.stringify({ auth: state.settings?.appPin || "", state: state, newEntry: newEntry })
         });
         updateSyncUI('success');
       } catch(err) {
