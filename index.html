@@ -448,22 +448,22 @@
     // 1. DATA SYNCING & INIT
     // ==========================================
    function loadSettings() { 
-  document.getElementById('settings-gemini-key').value = state.settings?.geminiKey || ""; 
-  document.getElementById('app-pin').value = state.settings?.appPin || "";
-} 
+      document.getElementById('settings-gemini-key').value = state.settings?.geminiKey || ""; 
+      document.getElementById('app-pin').value = state.settings?.appPin || "";
+    } 
 
-function saveSettings(e) { 
-  if (e) e.preventDefault(); 
-  if (!state.settings) state.settings = {};
-  
-  state.settings.geminiKey = document.getElementById('settings-gemini-key').value.trim();
-  state.settings.appPin = document.getElementById('app-pin').value.trim();
-  
-  saveLocalState();
-  closeModal('modal-settings');
-  showToast("Settings saved");
-  loadDataFromSheet(); 
-}
+    function saveSettings(e) { 
+      if (e) e.preventDefault(); 
+      if (!state.settings) state.settings = {};
+      
+      state.settings.geminiKey = document.getElementById('settings-gemini-key').value.trim();
+      state.settings.appPin = document.getElementById('app-pin').value.trim();
+      
+      saveLocalState();
+      closeModal('modal-settings');
+      showToast("Settings saved");
+      loadDataFromSheet(); 
+    }
 
     function loadLocalState() {
       const s = localStorage.getItem('spendpulse_state_v2');
@@ -484,45 +484,55 @@ function saveSettings(e) {
       localStorage.setItem('spendpulse_state_v2', JSON.stringify(state));
     }
 
-   async function loadDataFromSheet(hideOverlay = false) {
-  if(isSyncing) return;
-  isSyncing = true;
-  updateSyncUI('syncing');
+    async function loadDataFromSheet(hideOverlay = false) {
+      if(isSyncing) return;
+      isSyncing = true;
+      updateSyncUI('syncing');
 
-  try {
-   const pin = state.settings?.appPin || ""; 
-const res = await fetch(`${SCRIPT_URL}?auth=${encodeURIComponent(pin)}`, { method: "GET", redirect: "follow" });
-    const result = await res.json();
+      try {
+        const pin = state.settings?.appPin || ""; 
+        const res = await fetch(`${SCRIPT_URL}?auth=${encodeURIComponent(pin)}`, { method: "GET", redirect: "follow" });
+        const result = await res.json();
 
-    // Support both the old format and the new row-based format
-    const cloudState = result.status === "success" ? result.data : result;
+        // Handle unauthorized errors explicitly
+        if (result.error) throw new Error(result.error);
 
-    if (cloudState) {
-      state = cloudState;
-      const today = new Date().toISOString().split('T')[0];
-      state.currentMonth = today.substring(0,7);
-      
-      saveLocalState();
-      renderAll();
-      updateSyncUI('success');
-      if(!hideOverlay) showToast("Data synced from cloud!");
-    } else {
-      updateSyncUI('success');
+        // Support both the old format and the new row-based format
+        let cloudState = result.status === "success" ? result.data : result;
+
+        if (cloudState) {
+          // Un-nest the state if it accidentally got wrapped in { state: {...} } during the glitch
+          state = cloudState.state ? cloudState.state : cloudState;
+          
+          // Map the backend's 'transactions' array back to your frontend's 'txs' array
+          if (state.transactions) {
+            state.txs = state.transactions;
+            delete state.transactions;
+          }
+          if (!state.txs) state.txs = [];
+
+          const today = new Date().toISOString().split('T')[0];
+          state.currentMonth = today.substring(0,7);
+          
+          saveLocalState();
+          renderAll();
+          updateSyncUI('success');
+          if(!hideOverlay) showToast("Data synced from cloud!");
+        } else {
+          updateSyncUI('success');
+        }
+      } catch(err) {
+        console.error(err);
+        updateSyncUI('error');
+        if(!hideOverlay) showToast("Sync failed");
+      } finally {
+        isSyncing = false;
+        if(hideOverlay) {
+          document.getElementById('initial-loading').classList.add('opacity-0');
+          setTimeout(() => document.getElementById('initial-loading').classList.add('hidden'), 300);
+        }
+      }
     }
-  } catch(err) {
-    console.error(err);
-    updateSyncUI('error');
-    if(!hideOverlay) showToast("Sync failed");
-  } finally {
-    isSyncing = false;
-    
-    // Hide the initial loading screen if requested
-  if(hideOverlay) {
-      document.getElementById('initial-loading').classList.add('opacity-0');
-      setTimeout(() => document.getElementById('initial-loading').classList.add('hidden'), 300);
-    }
-  }
-}
    
     async function syncDataToSheet(newEntry = null) {
       if(isSyncing) return;
@@ -530,11 +540,17 @@ const res = await fetch(`${SCRIPT_URL}?auth=${encodeURIComponent(pin)}`, { metho
       updateSyncUI('syncing');
       
       try {
+        // Flatten the payload exactly how the backend Apps Script expects it
+        const payload = Object.assign({}, state);
+        payload.auth = state.settings?.appPin || "";
+        payload.transactions = state.txs; // Feed the backend the 'transactions' array it expects
+        delete payload.txs; // Remove duplicate array to save space in cell A1
+
         await fetch(SCRIPT_URL, {
           method: "POST",
           redirect: "follow",
           headers: { "Content-Type": "text/plain;charset=utf-8" }, 
-         body: JSON.stringify({ auth: state.settings?.appPin || "", state: state, newEntry: newEntry })
+          body: JSON.stringify(payload)
         });
         updateSyncUI('success');
       } catch(err) {
