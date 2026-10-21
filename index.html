@@ -469,37 +469,45 @@
       localStorage.setItem('spendpulse_state_v2', JSON.stringify(state));
     }
 
-    async function loadDataFromSheet(hideOverlay = false) {
-      if(isSyncing) return;
-      isSyncing = true;
-      updateSyncUI('syncing');
-      
-      try {
-        const res = await fetch(SCRIPT_URL, { method: "GET", redirect: "follow" });
-        const result = await res.json();
-        
-        if (result.status === "success" && result.data) {
-          state = result.data;
-          const today = new Date().toISOString().split('T')[0];
-          state.currentMonth = today.substring(0,7);
-          saveLocalState();
-          renderAll();
-          updateSyncUI('success');
-          if(!hideOverlay) showToast("Data synced from cloud!");
-        } else { updateSyncUI('success'); }
-      } catch(err) {
-        console.warn("Pull Error:", err);
-        updateSyncUI('error');
-        if(!hideOverlay) showToast("Offline mode. Showing local data.", "error");
-      } finally {
-        isSyncing = false;
-        if(hideOverlay) {
-          document.getElementById('initial-loading').classList.add('opacity-0');
-          setTimeout(() => document.getElementById('initial-loading').classList.add('hidden'), 300);
-        }
-      }
-    }
+   async function loadDataFromSheet(hideOverlay = false) {
+  if(isSyncing) return;
+  isSyncing = true;
+  updateSyncUI('syncing');
 
+  try {
+    const res = await fetch(SCRIPT_URL, { method: "GET", redirect: "follow" });
+    const result = await res.json();
+
+    // Support both the old format and the new row-based format
+    const cloudState = result.status === "success" ? result.data : result;
+
+    if (cloudState) {
+      state = cloudState;
+      const today = new Date().toISOString().split('T')[0];
+      state.currentMonth = today.substring(0,7);
+      
+      saveLocalState();
+      renderAll();
+      updateSyncUI('success');
+      if(!hideOverlay) showToast("Data synced from cloud!");
+    } else {
+      updateSyncUI('success');
+    }
+  } catch(err) {
+    console.error(err);
+    updateSyncUI('error');
+    if(!hideOverlay) showToast("Sync failed");
+  } finally {
+    isSyncing = false;
+    
+    // Hide the initial loading screen if requested
+  if(hideOverlay) {
+      document.getElementById('initial-loading').classList.add('opacity-0');
+      setTimeout(() => document.getElementById('initial-loading').classList.add('hidden'), 300);
+    }
+  }
+}
+   
     async function syncDataToSheet(newEntry = null) {
       if(isSyncing) return;
       isSyncing = true;
